@@ -11,7 +11,8 @@ const STORAGE_KEYS = {
   activeSession: 'wordbook_active_session_v1',
   history: 'wordbook_history_v1',
   audit: 'wordbook_audit_v1',
-  attempts: 'wordbook_attempts_v1'
+  attempts: 'wordbook_attempts_v1',
+  missed: 'wordbook_missed_words_v1'
 };
 
 const DEFAULT_SETTINGS = {
@@ -213,7 +214,8 @@ function downloadAllData() {
     activeSession: loadJSON(STORAGE_KEYS.activeSession),
     history: loadJSON(STORAGE_KEYS.history) || [],
     audit: loadJSON(STORAGE_KEYS.audit) || [],
-    attempts: loadJSON(STORAGE_KEYS.attempts) || []
+    attempts: loadJSON(STORAGE_KEYS.attempts) || [],
+    missed: loadJSON(STORAGE_KEYS.missed) || []
   };
   // PINハッシュは不要ならマスクしてもよいが、テスト用にそのまま
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -387,17 +389,31 @@ class GameEngine {
     const count = Math.min(wordCount || this.settings.wordCount, enabled.length);
     const seed = Math.floor(Math.random() * 0x7fffffff);
     const order = seededShuffle(enabled, seed).slice(0, count);
+    this._createSession(level, order, false);
+  }
 
+  startSessionWithMissed(level) {
+    const storedIds = loadJSON(STORAGE_KEYS.missed) || [];
+    const validIds = storedIds.filter(id => this.wordsMap.has(id));
+    if (validIds.length === 0) return false;
+    const seed = Math.floor(Math.random() * 0x7fffffff);
+    const order = seededShuffle(validIds, seed);
+    this._createSession(level, order, true);
+    return true;
+  }
+
+  _createSession(level, wordOrder, isMissedPractice) {
+    const seed = Math.floor(Math.random() * 0x7fffffff);
     this.session = {
       id: uuid(),
       level,
       startedAt: new Date().toISOString(),
       state: 'presentingQuestion',
       seed,
-      targetCorrectCount: order.length,
+      targetCorrectCount: wordOrder.length,
       netCorrectCount: 0,
       currentIndex: 0,
-      wordOrder: order,
+      wordOrder: wordOrder.slice(),
       deadline: null,
       questionStartTime: null,
       timeoutsCount: 0,
@@ -408,7 +424,8 @@ class GameEngine {
       timeoutAppliedWhileHidden: false,
       completedAt: null,
       missedWordIds: [],
-      reviewIndex: 0
+      reviewIndex: 0,
+      isMissedPractice: !!isMissedPractice
     };
     this.saveSession();
     this.presentQuestion();
@@ -631,6 +648,7 @@ class GameEngine {
 
     const start = new Date(this.session.startedAt).getTime();
     const duration = (Date.now() - start) / 1000;
+    const missedIds = (this.session.missedWordIds || []).slice();
     const entry = {
       id: uuid(),
       sessionId: this.session.id,
@@ -641,22 +659,36 @@ class GameEngine {
       correctCount: this.session.netCorrectCount,
       timeoutCount: this.session.timeoutsCount,
       incorrectCount: this.session.incorrectCount,
-      manualPassCount: this.session.manualPassCount
+      manualPassCount: this.session.manualPassCount,
+      missedWordIds: missedIds
     };
     const history = loadJSON(STORAGE_KEYS.history) || [];
     history.push(entry);
     saveJSON(STORAGE_KEYS.history, history);
 
-    const missedWords = (this.session.missedWordIds || [])
+    const missedWords = missedIds
       .map(id => {
         const w = this.wordsMap.get(id);
         return w ? { id, word: w.word, meaningJa: w.meaningJa } : null;
       })
       .filter(Boolean);
 
+    this._updateMissedStorage(missedIds);
+
     this.onChange('completed', { session: this.session, history: entry, missedWords });
     this.session = null;
     localStorage.removeItem(STORAGE_KEYS.activeSession);
+  }
+
+  _updateMissedStorage(currentMissedIds) {
+    if (this.session && this.session.isMissedPractice) {
+      // 間違い直しモードでは結果をそのまま反映
+      saveJSON(STORAGE_KEYS.missed, [...new Set(currentMissedIds)]);
+    } else {
+      const stored = loadJSON(STORAGE_KEYS.missed) || [];
+      const merged = [...new Set([...stored, ...currentMissedIds])];
+      saveJSON(STORAGE_KEYS.missed, merged);
+    }
   }
 
   startReview() {
@@ -838,6 +870,9 @@ class UIController {
     this.els.activeSessionInfo = $('#active-session-info');
     this.els.resumeBtn = $('#btn-resume');
     this.els.clearSessionBtn = $('#btn-clear-session');
+    this.els.missedL1 = $('#btn-missed-l1');
+    this.els.missedL2 = $('#btn-missed-l2');
+    this.els.missedL3 = $('#btn-missed-l3');
     this.els.historyList = $('#history-list');
     this.els.auditList = $('#audit-list');
     this.els.completionSummary = $('#completion-summary');
@@ -881,6 +916,12 @@ class UIController {
       this.els.clearSessionBtn.classList.add('hidden');
       this.els.activeSessionInfo.classList.add('hidden');
     }
+
+    const missedIds = loadJSON(STORAGE_KEYS.missed) || [];
+    const hasMissed = missedIds.length > 0;
+    [this.els.missedL1, this.els.missedL2, this.els.missedL3].forEach(btn => {
+      btn.classList.toggle('hidden', !hasMissed);
+    });
   }
 
   bindEvents() {
@@ -890,6 +931,17 @@ class UIController {
     $('#btn-start-l1').addEventListener('click', () => start(1));
     $('#btn-start-l2').addEventListener('click', () => start(2));
     $('#btn-start-l3').addEventListener('click', () => start(3));
+
+    const startMissed = (lv) => {
+      if (!this.engine.startSessionWithMissed(lv)) {
+        alert('間違った問題リストが空です');
+      } else {
+        this.showScreen('screen-session');
+      }
+    };
+    this.els.missedL1.addEventListener('click', () => startMissed(1));
+    this.els.missedL2.addEventListener('click', () => startMissed(2));
+    this.els.missedL3.addEventListener('click', () => startMissed(3));
 
     this.els.resumeBtn.addEventListener('click', () => {
       if (this.engine.resume()) this.showScreen('screen-session');

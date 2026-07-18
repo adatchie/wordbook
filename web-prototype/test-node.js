@@ -241,6 +241,38 @@ async function runTests() {
   if (!html.includes(w0.word) || !html.includes(w0.meaningJa)) throw new Error('completion missed list missing w0');
   console.log('  OK');
 
+  // Test 7: missed practice mode
+  console.log('Test 7: missed practice mode');
+  localStorage.removeItem('wordbook_missed_words_v1');
+  engine.settings.wordCount = 1;
+  engine.settings.manualPassLimit = 0;
+  engine.startSession(2, 1);
+  const missedWord = engine.getCurrentInfo().word;
+  engine.markIncorrect();
+  engine.markWrongAndNext();
+  await wait();
+  engine.markCorrect(false);
+  await wait();
+  if (engine.session.state !== 'review') throw new Error('expected review before completion: ' + engine.session.state);
+  engine.reviewNext();
+  await wait();
+
+  const missedStorage = JSON.parse(localStorage.getItem('wordbook_missed_words_v1') || '[]');
+  if (missedStorage.length !== 1 || missedStorage[0] !== missedWord.id) throw new Error('missed storage wrong: ' + JSON.stringify(missedStorage));
+
+  const ok = engine.startSessionWithMissed(1);
+  if (!ok) throw new Error('startSessionWithMissed failed');
+  if (engine.session.targetCorrectCount !== 1) throw new Error('missed practice target not 1');
+  if (engine.session.wordOrder[0] !== missedWord.id) throw new Error('missed practice word mismatch');
+  if (!engine.session.isMissedPractice) throw new Error('not missed practice');
+
+  engine.markCorrect(false);
+  await wait();
+  if (engine.session !== null) throw new Error('expected missed practice completion');
+  const missedStorage2 = JSON.parse(localStorage.getItem('wordbook_missed_words_v1') || '[]');
+  if (missedStorage2.length !== 0) throw new Error('missed storage not cleared: ' + JSON.stringify(missedStorage2));
+  console.log('  OK');
+
   console.log('\nAll smoke tests passed.');
 }
 

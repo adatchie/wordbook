@@ -202,6 +202,45 @@ async function runTests() {
   if (last.level !== 3) throw new Error('history level not 3');
   console.log('  OK, history entries:', history.length);
 
+  // Test 6: wrong -> next, manual pass from wrong, review and missed list
+  console.log('Test 6: wrong-next + manual pass + review + missed list');
+  engine.settings.wordCount = 3;
+  engine.settings.manualPassLimit = 10;
+  engine.settings.manualPassCooldown = 0;
+  engine.startSession(2, 3);
+  const w0 = engine.getCurrentInfo().word;
+  engine.markIncorrect();
+  if (engine.session.state !== 'incorrectFeedback') throw new Error('expected incorrectFeedback');
+  engine.markWrongAndNext();
+  await wait();
+  if (engine.session.state !== 'acceptingInk') throw new Error('state after wrong next: ' + engine.session.state);
+  if (engine.session.missedWordIds.length !== 1 || engine.session.missedWordIds[0] !== w0.id) throw new Error('missed list wrong');
+  if (engine.session.incorrectCount !== 1) throw new Error('incorrectCount not 1');
+  if (engine.session.currentIndex !== 1) throw new Error('currentIndex not advanced');
+
+  engine.markIncorrect();
+  if (engine.session.state !== 'incorrectFeedback') throw new Error('expected incorrectFeedback before manual pass');
+  const r3 = await engine.manualPass('data:image/png;base64,BBB');
+  if (!r3.ok) throw new Error('manualPass from wrong failed: ' + r3.reason);
+  await wait();
+  if (engine.session.state !== 'acceptingInk') throw new Error('state after manual pass: ' + engine.session.state);
+  if (engine.session.manualPassCount !== 1) throw new Error('manualPassCount not 1');
+
+  engine.markCorrect(false); // q2 -> 1
+  await wait();
+  engine.markCorrect(false); // q3 -> 2, extends wordOrder
+  await wait();
+  engine.markCorrect(false); // q4 -> 3, starts review
+  await wait();
+  if (engine.session.state !== 'review') throw new Error('expected review: ' + (engine.session && engine.session.state));
+
+  engine.reviewNext();
+  await wait();
+  if (engine.session !== null) throw new Error('session should be completed after review');
+  const html = wb.ui.els.completionSummary.innerHTML;
+  if (!html.includes(w0.word) || !html.includes(w0.meaningJa)) throw new Error('completion missed list missing w0');
+  console.log('  OK');
+
   console.log('\nAll smoke tests passed.');
 }
 

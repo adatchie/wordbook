@@ -406,7 +406,9 @@ class GameEngine {
       manualPassCooldown: 0,
       manualPassAvailable: true,
       timeoutAppliedWhileHidden: false,
-      completedAt: null
+      completedAt: null,
+      missedWordIds: [],
+      reviewIndex: 0
     };
     this.saveSession();
     this.presentQuestion();
@@ -436,6 +438,15 @@ class GameEngine {
         remainingMs: Math.max(0, this.session.deadline - Date.now()),
         manualPassAllowed: this.session.manualPassAvailable
       });
+      return true;
+    }
+    if (this.session.state === 'review') {
+      this.presentReviewQuestion();
+      return true;
+    }
+    if (this.session.state === 'incorrectFeedback') {
+      const info = this.getCurrentInfo();
+      this.onChange('incorrectFeedback', { session: this.session, ...info });
       return true;
     }
     // その他の状態はリセットして出題し直す
@@ -534,11 +545,24 @@ class GameEngine {
   markIncorrect() {
     if (!this.session || this.session.state !== 'acceptingInk') return;
     this.stopTimer();
-    this.session.incorrectCount += 1;
-    this.recordAttempt('incorrect');
     this.session.state = 'incorrectFeedback';
     this.saveSession();
     this.onChange('incorrectFeedback', { session: this.session });
+  }
+
+  markWrongAndNext() {
+    if (!this.session || this.session.state !== 'incorrectFeedback') return;
+    const info = this.getCurrentInfo();
+    if (info.word) {
+      if (!this.session.missedWordIds.includes(info.word.id)) {
+        this.session.missedWordIds.push(info.word.id);
+      }
+    }
+    this.session.incorrectCount += 1;
+    this.recordAttempt('incorrect');
+    this.session.currentIndex += 1;
+    this.saveSession();
+    this.presentQuestion();
   }
 
   retry() {
@@ -581,7 +605,11 @@ class GameEngine {
       this.session.currentIndex += 1;
       this.saveSession();
       if (this.session.netCorrectCount >= this.session.targetCorrectCount) {
-        this.completeSession();
+        if (this.session.missedWordIds && this.session.missedWordIds.length > 0) {
+          this.startReview();
+        } else {
+          this.completeSession();
+        }
       } else {
         this.presentQuestion();
       }
@@ -619,9 +647,65 @@ class GameEngine {
     history.push(entry);
     saveJSON(STORAGE_KEYS.history, history);
 
-    this.onChange('completed', { session: this.session, history: entry });
+    const missedWords = (this.session.missedWordIds || [])
+      .map(id => {
+        const w = this.wordsMap.get(id);
+        return w ? { id, word: w.word, meaningJa: w.meaningJa } : null;
+      })
+      .filter(Boolean);
+
+    this.onChange('completed', { session: this.session, history: entry, missedWords });
     this.session = null;
     localStorage.removeItem(STORAGE_KEYS.activeSession);
+  }
+
+  startReview() {
+    if (!this.session) return;
+    this.session.state = 'review';
+    this.session.reviewIndex = 0;
+    this.saveSession();
+    this.presentReviewQuestion();
+  }
+
+  presentReviewQuestion() {
+    if (!this.session) return;
+    const missed = this.session.missedWordIds || [];
+    while (this.session.reviewIndex < missed.length) {
+      const id = missed[this.session.reviewIndex];
+      const word = this.wordsMap.get(id) || null;
+      if (word) break;
+      this.session.reviewIndex += 1;
+    }
+    if (this.session.reviewIndex >= missed.length) {
+      this.completeSession();
+      return;
+    }
+    const word = this.wordsMap.get(missed[this.session.reviewIndex]);
+    const reviewLevel = Math.max(1, this.session.level - 1);
+    const seed = this.session.seed + this.session.reviewIndex * 1009 + 999999;
+    const prompt = getMaskedPrompt(word.word, reviewLevel, seed);
+    const alphaCount = [...word.word].filter(c => /[a-zA-Z]/.test(c)).length;
+    const totalCount = [...word.word].length;
+    const hint = `${word.meaningJa}（${totalCount}文字・英字${alphaCount}）`;
+    this.stopTimer();
+    this.session.state = 'review';
+    this.session.deadline = null;
+    this.saveSession();
+    this.onChange('review', {
+      session: this.session,
+      word,
+      prompt,
+      hint,
+      reviewIndex: this.session.reviewIndex,
+      remainingMs: this.settings.timeLimitMs
+    });
+  }
+
+  reviewNext() {
+    if (!this.session || this.session.state !== 'review') return;
+    this.session.reviewIndex += 1;
+    this.saveSession();
+    this.presentReviewQuestion();
   }
 
   suspend() {
@@ -741,6 +825,7 @@ class UIController {
     this.els.sessionProgress = $('#session-progress');
     this.els.timerFill = $('#timer-fill');
     this.els.timerText = $('#timer-text');
+    this.els.correctBtn = $('#btn-correct');
     this.els.prompt = $('#question-prompt');
     this.els.meaning = $('#question-meaning');
     this.els.hint = $('#question-hint');
@@ -864,6 +949,7 @@ class UIController {
           this.els.previousList.innerHTML = '';
         }
         this.canvasCtrl.clear();
+        this.els.correctBtn.textContent = 'できた！';
         this.els.retryBtn.innerHTML = '× OCRが間違い判定（テスト）';
         this.updateQuestion(payload);
         this.updateTimer({ remainingMs: payload.remainingMs, ratio: 1 });
@@ -887,17 +973,34 @@ class UIController {
         break;
       case 'incorrectFeedback':
         this.setControlsEnabled(false);
-        this.els.retryBtn.innerHTML = 'もう一度書く';
+        this.els.correctBtn.textContent = 'できた！';
+        this.els.retryBtn.innerHTML = '間違いのまま次へ';
         this.els.retryBtn.disabled = false;
-        this.updateManualPassStatus();
-        this.setFeedback('OCRは間違いと判定。もう一度書くか、手動正解を使ってください。', 'incorrect');
+        this.els.manualPassBtn.disabled = !this.engine.isManualPassAllowed();
+        this.els.manualPassStatus.textContent = this.engine.isManualPassAllowed() ? '手動正解を使う' : '';
+        this.setFeedback('OCRは間違いと判定。手動正解するか、間違いとして次へ進んでください。', 'incorrect');
+        break;
+      case 'review':
+        this.showScreen('screen-session');
+        this.canvasCtrl.clear();
+        this.els.correctBtn.textContent = '次へ';
+        this.els.retryBtn.innerHTML = '× OCRが間違い判定（テスト）';
+        this.els.manualPassBtn.disabled = true;
+        this.els.savePngBtn.disabled = true;
+        this.updateQuestion(payload);
+        this.updateTimer({ remainingMs: payload.remainingMs, ratio: 1 });
+        this.setFeedback('復習（Lvを下げて再提示）', 'review');
+        this.setControlsEnabled(true);
+        this.els.manualPassBtn.disabled = true;
+        this.els.retryBtn.disabled = true;
+        this.els.savePngBtn.disabled = true;
         break;
       case 'timedOut':
         this.setControlsEnabled(false);
         this.setFeedback('時間切れ（1点減点・目標+1）', 'timeout');
         break;
       case 'completed':
-        this.showCompletion(payload.history);
+        this.showCompletion(payload.history, payload.missedWords);
         break;
     }
   }
@@ -939,6 +1042,10 @@ class UIController {
   }
 
   onCorrect() {
+    if (this.engine.session && this.engine.session.state === 'review') {
+      this.engine.reviewNext();
+      return;
+    }
     if (!this.canvasCtrl.hasDrawing()) {
       alert('まだ何も書かれていません');
       return;
@@ -948,8 +1055,8 @@ class UIController {
 
   onRetry() {
     if (this.engine.session && this.engine.session.state === 'incorrectFeedback') {
-      this.engine.retry();
-    } else {
+      this.engine.markWrongAndNext();
+    } else if (this.engine.session && this.engine.session.state === 'acceptingInk') {
       this.engine.markIncorrect();
     }
   }
@@ -1172,13 +1279,24 @@ class UIController {
   }
 
   /* ---- Completion ---- */
-  showCompletion(history) {
+  showCompletion(history, missedWords) {
     const s = history;
+    let missedHtml = '';
+    if (missedWords && missedWords.length > 0) {
+      const items = missedWords.map(m => `<li><strong>${m.word}</strong> — ${m.meaningJa}</li>`).join('');
+      missedHtml = `
+        <div class="missed-review">
+          <h3>間違った問題の振り返り</h3>
+          <ul>${items}</ul>
+        </div>
+      `;
+    }
     this.els.completionSummary.innerHTML = `
       <p><strong>Lv${s.level}</strong> 完了</p>
       <p>正答数: ${s.correctCount} / ${s.targetCount}</p>
       <p>タイムアウト: ${s.timeoutCount}, 誤答: ${s.incorrectCount}, 手動正解: ${s.manualPassCount}</p>
       <p>所要時間: ${formatDuration(s.durationSeconds)}</p>
+      ${missedHtml}
     `;
     this.showScreen('screen-completion');
     this.updateMainScreen();

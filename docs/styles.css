@@ -279,6 +279,10 @@ button.manual small {
   color: #ff9500;
 }
 
+.feedback.review {
+  color: #007aff;
+}
+
 .status {
   font-size: 0.85rem;
   color: #636366;
@@ -312,6 +316,21 @@ button.manual small {
   overflow-y: auto;
   max-height: 60vh;
   margin-bottom: 12px;
+}
+
+.missed-review ul {
+  text-align: left;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin: 12px 0 0;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.missed-review li {
+  margin-bottom: 6px;
 }
 
 .card {

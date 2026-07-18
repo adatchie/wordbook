@@ -443,9 +443,26 @@ class GameEngine {
     return true;
   }
 
+  _appendExtraWord() {
+    if (!this.session) return;
+    const enabled = this.wordsArray.map(w => w.id);
+    const lastId = this.session.wordOrder[this.session.wordOrder.length - 1];
+    const candidates = enabled.filter(id => id !== lastId);
+    const nextId = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : enabled[0];
+    this.session.wordOrder.push(nextId);
+  }
+
+  _ensureWordOrder() {
+    if (!this.session) return;
+    while (this.session.currentIndex >= this.session.wordOrder.length) {
+      this._appendExtraWord();
+    }
+  }
+
   getCurrentInfo() {
     if (!this.session) return { word: null, prompt: '', hint: '', charCount: 0 };
-    const idx = this.session.currentIndex % this.session.wordOrder.length;
+    this._ensureWordOrder();
+    const idx = this.session.currentIndex;
     const id = this.session.wordOrder[idx];
     const word = this.wordsMap.get(id) || null;
     if (!word) return { word: null, prompt: '', hint: '', charCount: 0 };
@@ -506,6 +523,7 @@ class GameEngine {
     this.session.netCorrectCount = Math.max(0, this.session.netCorrectCount - 1);
     this.session.targetCorrectCount += 1;
     this.session.timeoutsCount += 1;
+    this._appendExtraWord();
     this.recordAttempt('timeout');
     this.session.state = 'timedOut';
     this.saveSession();
@@ -864,7 +882,7 @@ class UIController {
         break;
       case 'incorrectFeedback':
         this.setControlsEnabled(false);
-        this.setFeedback('もう一度書いてみよう', 'incorrect');
+        this.setFeedback('OCRは間違いと判定。もう一度書くか、手動正解を使ってください。', 'incorrect');
         break;
       case 'timedOut':
         this.setControlsEnabled(false);

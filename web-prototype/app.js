@@ -940,6 +940,7 @@ class UIController {
     this.els.feedback = $('#feedback');
     this.els.manualPassBtn = $('#btn-manual-pass');
     this.els.retryBtn = $('#btn-retry');
+    this.els.rewriteBtn = $('#btn-rewrite');
     this.els.ocrDebug = $('#ocr-debug');
     this.els.savePngBtn = $('#btn-save-png');
     this.els.manualPassStatus = $('#manual-pass-status');
@@ -1047,6 +1048,7 @@ class UIController {
     $('#btn-correct').addEventListener('click', () => this.onCorrect().catch(e => console.error(e)));
     this.els.manualPassBtn.addEventListener('click', () => this.onManualPass());
     this.els.retryBtn.addEventListener('click', () => this.onRetry());
+    this.els.rewriteBtn.addEventListener('click', () => this.onRewrite());
     this.els.savePngBtn.addEventListener('click', () => this.onSavePng());
     $('#btn-pause').addEventListener('click', () => {
       this.engine.suspend();
@@ -1080,6 +1082,10 @@ class UIController {
         this.canvasCtrl.clear();
         this.els.correctBtn.textContent = 'できた！';
         this.els.retryBtn.innerHTML = '× 間違いとして次へ';
+        if (this.els.rewriteBtn) {
+          this.els.rewriteBtn.style.display = 'inline-block';
+          this.els.rewriteBtn.textContent = 'もう一度書く';
+        }
         if (this.els.ocrDebug) this.els.ocrDebug.style.display = 'none';
         this.updateQuestion(payload);
         this.updateTimer({ remainingMs: payload.remainingMs, ratio: 1 });
@@ -1106,15 +1112,21 @@ class UIController {
         this.els.correctBtn.textContent = 'できた！';
         this.els.retryBtn.innerHTML = '間違いのまま次へ';
         this.els.retryBtn.disabled = false;
+        if (this.els.rewriteBtn) {
+          this.els.rewriteBtn.style.display = 'inline-block';
+          this.els.rewriteBtn.textContent = 'もう一度書く';
+          this.els.rewriteBtn.disabled = false;
+        }
         this.els.manualPassBtn.disabled = !this.engine.isManualPassAllowed();
         this.els.manualPassStatus.textContent = this.engine.isManualPassAllowed() ? '手動正解を使う' : '';
-        this.setFeedback('OCRは「間違い」と判定しました。手動正解するか、間違いとして次へ進んでください。', 'incorrect');
+        this.setFeedback('OCRは「間違い」と判定しました。手動正解するか、もう一度書くか、間違いとして次へ進んでください。', 'incorrect');
         break;
       case 'review':
         this.showScreen('screen-session');
         this.canvasCtrl.clear();
         this.els.correctBtn.textContent = '次へ';
         this.els.retryBtn.innerHTML = '× 間違いとして次へ';
+        if (this.els.rewriteBtn) this.els.rewriteBtn.style.display = 'none';
         this.els.manualPassBtn.disabled = true;
         this.els.savePngBtn.disabled = true;
         this.updateQuestion(payload);
@@ -1127,6 +1139,7 @@ class UIController {
         break;
       case 'timedOut':
         this.setControlsEnabled(false);
+        if (this.els.rewriteBtn) this.els.rewriteBtn.style.display = 'none';
         this.setFeedback('時間切れ（1点減点・目標+1）', 'timeout');
         break;
       case 'completed':
@@ -1166,6 +1179,7 @@ class UIController {
     $('#btn-correct').disabled = !enabled;
     this.els.manualPassBtn.disabled = !enabled;
     this.els.retryBtn.disabled = !enabled;
+    if (this.els.rewriteBtn) this.els.rewriteBtn.disabled = !enabled;
     this.els.savePngBtn.disabled = !enabled;
     $('#btn-pause').disabled = !enabled;
     $('#draw-canvas').style.pointerEvents = enabled ? 'auto' : 'none';
@@ -1188,6 +1202,15 @@ class UIController {
       this.engine.markWrongAndNext();
     } else if (this.engine.session && this.engine.session.state === 'acceptingInk') {
       this.engine.markIncorrect();
+    }
+  }
+
+  onRewrite() {
+    if (!this.engine.session) return;
+    if (this.engine.session.state === 'acceptingInk') {
+      this.canvasCtrl.clear();
+    } else if (this.engine.session.state === 'incorrectFeedback') {
+      this.engine.retry();
     }
   }
 

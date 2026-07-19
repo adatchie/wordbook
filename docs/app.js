@@ -382,6 +382,7 @@ function normalizeOCRText(text) {
 class OCRController {
   constructor() {
     this.workerPromise = null;
+    this.readyPromise = null;
   }
 
   getWorker() {
@@ -389,15 +390,49 @@ class OCRController {
       return Promise.reject(new Error('Tesseract.js が読み込まれていません'));
     }
     if (!this.workerPromise) {
-      this.workerPromise = Tesseract.createWorker('eng', 1, {
+      this.workerPromise = Tesseract.createWorker({
         logger: m => console.log('[tesseract]', m)
       });
+      this.readyPromise = this.workerPromise.then(async (worker) => {
+        if (typeof worker.loadLanguage === 'function') {
+          await worker.loadLanguage('eng');
+        }
+        if (typeof worker.initialize === 'function') {
+          await worker.initialize('eng', 1, {
+            load_system_dawg: '0',
+            load_freq_dawg: '0',
+            load_punc_dawg: '0',
+            load_number_dawg: '0',
+            load_unambig_dawg: '0',
+            load_fixed_length_dawgs: '0',
+            tessedit_enable_dict_correction: '0',
+            language_model_penalty_non_dict_word: '0',
+            language_model_penalty_non_freq_dict_word: '0'
+          });
+        }
+        await this._setWordParams(worker);
+        return worker;
+      });
     }
-    return this.workerPromise;
+    return this.readyPromise;
+  }
+
+  _psm() {
+    return (Tesseract.PSM && Tesseract.PSM.SINGLE_WORD) ? Tesseract.PSM.SINGLE_WORD : '8';
+  }
+
+  async _setWordParams(worker) {
+    if (typeof worker.setParameters === 'function') {
+      await worker.setParameters({
+        tessedit_pageseg_mode: this._psm(),
+        tessedit_char_whitelist: 'abcdefghijklmnopqrstuvwxyz'
+      });
+    }
   }
 
   async recognize(imageDataUrl) {
     const worker = await this.getWorker();
+    await this._setWordParams(worker);
     const { data } = await worker.recognize(imageDataUrl);
     return { text: (data.text || '').trim(), confidence: data.confidence || 0 };
   }
@@ -1172,13 +1207,15 @@ class UIController {
     try {
       const image = this.canvasCtrl.renderToDataURL({ padding: 30, scale: 3, background: '#ffffff', stroke: '#000000' });
       const result = await this.ocr.recognize(image);
+      console.log('[OCR]', result);
       const check = this.engine.checkOCR(result.text);
+      const confidence = result.confidence || 0;
 
-      if (check.matched) {
-        this.setFeedback(`OCR一致「${check.normalized}」（信頼度 ${Math.round(result.confidence)}%）`, 'correct');
+      if (check.matched && confidence >= 60) {
+        this.setFeedback(`OCR一致「${check.normalized}」（信頼度 ${Math.round(confidence)}%）`, 'correct');
         this.engine.markCorrect(false);
       } else {
-        this.setFeedback(`OCR結果「${check.normalized || result.text || '（不明）'}」（信頼度 ${Math.round(result.confidence)}%）`, 'incorrect');
+        this.setFeedback(`OCR結果「${check.normalized || result.text || '（読み取れませんでした）'}」（信頼度 ${Math.round(confidence)}%）`, 'incorrect');
         this.engine.markIncorrect();
       }
     } catch (e) {

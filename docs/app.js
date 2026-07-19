@@ -421,8 +421,9 @@ class OCRController {
   async recognize(imageDataUrl) {
     const captioner = await this.getOCR();
     const img = await this._loadImage(imageDataUrl);
+    const canvas = this._imageToCanvas(img);
 
-    const [output] = await captioner(img, { max_new_tokens: 32 });
+    const [output] = await captioner(canvas, { max_new_tokens: 32 });
     const text = ((output && output.generated_text) || '').trim();
     const confidence = text ? 100 : 0;
     return { text, confidence, metrics: {} };
@@ -438,6 +439,20 @@ class OCRController {
       img.onerror = () => reject(new Error('手書き画像の読み込みに失敗しました'));
       img.src = imageDataUrl;
     });
+  }
+
+  _imageToCanvas(img) {
+    if (img instanceof HTMLCanvasElement || img instanceof OffscreenCanvas) {
+      return img;
+    }
+    const width = img.naturalWidth || img.width || img.videoWidth || 1;
+    const height = img.naturalHeight || img.height || img.videoHeight || 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, width, height);
+    return canvas;
   }
 }
 
